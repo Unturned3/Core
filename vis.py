@@ -2,13 +2,13 @@
 import sys
 import cv2
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QLabel, QLineEdit, QVBoxLayout, QWidget,
-    QListWidget, QGridLayout,
+    QApplication, QMainWindow, QLabel, QLineEdit, QWidget,
+    QListWidget, QHBoxLayout, QVBoxLayout, QGridLayout,
 )
 from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, Property
 
-from QtComponents import ImagePanel, ToggleButton
+from QtComponents import ImagePanel, ToggleButton, HVBoxLayout
 
 class VideoVisualizer(QMainWindow):
 
@@ -22,6 +22,12 @@ class VideoVisualizer(QMainWindow):
         self.video_path = video_path
         self.cap = cv2.VideoCapture(video_path)
         self.n_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        self.vid_fps = int(self.cap.get(cv2.CAP_PROP_FPS))
+
+        self.vid_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.vid_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.vid_scale = 640 / self.vid_w
+        self.scaled_size = (640, int(self.vid_h * self.vid_scale))
 
         self.video_is_playing = False
 
@@ -39,7 +45,7 @@ class VideoVisualizer(QMainWindow):
         self.setFocus()
         self.setFocusPolicy(Qt.StrongFocus)
 
-        self.video_panel = ImagePanel(self)
+        self.video_panel = ImagePanel(self, self.scaled_size)
         self.video_panel.clicked.connect(self.onVideoPanelClick)
 
         self.frame_num_textbox = QLineEdit(self)
@@ -47,20 +53,23 @@ class VideoVisualizer(QMainWindow):
         self.frame_num_textbox.returnPressed.connect(self.onFrameInputReturn)
         self.frame_num_textbox.setFocusPolicy(Qt.ClickFocus)
 
-        self.play_button = ToggleButton(self, "Play", "Pause")
-        self.play_button.clicked.connect(self.toggle_play_video)
+        #self.play_button = ToggleButton(self, "Play", "Pause")
+        #self.play_button.clicked.connect(self.toggle_play_video)
 
         self.points_list = QListWidget(self)
 
-        grid = QGridLayout()
-        grid.addWidget(self.video_panel, 0, 0, 1, 2)
-        grid.addWidget(self.frame_num_textbox, 1, 0)
-        grid.addWidget(self.play_button, 1, 1)
-        grid.addWidget(self.points_list, 0, 2)
+        self.container = QWidget(self)
+        self.setCentralWidget(self.container)
 
-        container = QWidget()
-        container.setLayout(grid)
-        self.setCentralWidget(container)
+        box = HVBoxLayout(self.container)
+        box.addWidget(self.video_panel)
+        box.addWidget(self.points_list)
+        box.newline()
+        box.addWidget(QLabel('Frame'), 0)
+        box.addWidget(self.frame_num_textbox)
+        box.addWidget(QLabel(f'out of {self.n_frames-1}'), 0)
+        box.addStretch(10)
+        #box.addWidget(self.play_button, 12)
 
         self.displayFrame()
 
@@ -103,6 +112,7 @@ class VideoVisualizer(QMainWindow):
     @Slot()
     def displayFrame(self):
         ret, frame = self.cap.read()
+        frame = cv2.resize(frame, self.scaled_size)
         if ret:
             h, w, ch = frame.shape
             bytes_per_line = ch * w
@@ -120,7 +130,7 @@ class VideoVisualizer(QMainWindow):
         if self.video_is_playing:
             self.timer.stop()
         else:
-            self.timer.start(33)
+            self.timer.start(int(1000 / self.vid_fps))
         self.video_is_playing = not self.video_is_playing
 
     @Slot()

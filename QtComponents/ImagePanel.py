@@ -6,10 +6,10 @@ class ImagePanel(QLabel):
 
     clicked = Signal(QPoint)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, size=(640, 480)):
         super().__init__(parent)
         self.setCursor(Qt.CrossCursor)
-        self.setMaximumSize(640, 480)
+        self.setMaximumSize(*size)
         self.setAlignment(Qt.AlignmentFlag.AlignTop)
 
     def mousePressEvent(self, event):
