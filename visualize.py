@@ -3,12 +3,15 @@ import sys
 import cv2
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QLineEdit, QWidget,
-    QListWidget, QHBoxLayout, QVBoxLayout, QGridLayout,
+    QListWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QPushButton
 )
 from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, Property
 
 from QtComponents import ImagePanel, ToggleButton, HVBoxLayout
+
+import numpy as np
+import utils
 
 class VideoVisualizer(QMainWindow):
 
@@ -29,10 +32,15 @@ class VideoVisualizer(QMainWindow):
         self.vid_scale = 640 / self.vid_w
         self.scaled_size = (640, int(self.vid_h * self.vid_scale))
 
+        self.cpe_orig, self.cpg_orig = utils.load_est_gt_poses(video_path, self.vid_w)
+        self.cpe, self.cpg = utils.set_ref_cam(0, self.cpe_orig, self.cpg_orig)
+
         self.video_is_playing = False
 
         self._frame_num = 0
-        self.frameNumChanged.connect(self.displayFrame)
+        self.frameNumChanged.connect(self.readNewFrame)
+        self.frameNumChanged.connect(self.drawFrame)
+        self.frameNumChanged.connect(self.updateFrameNumTextbox)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.timerTimeout)
@@ -50,11 +58,16 @@ class VideoVisualizer(QMainWindow):
 
         self.frame_num_textbox = QLineEdit(self)
         self.frame_num_textbox.setText(str(self._frame_num))
-        self.frame_num_textbox.returnPressed.connect(self.onFrameInputReturn)
+        self.frame_num_textbox.returnPressed.connect(self.onFrameNumTextboxReturn)
         self.frame_num_textbox.setFocusPolicy(Qt.ClickFocus)
 
         #self.play_button = ToggleButton(self, "Play", "Pause")
         #self.play_button.clicked.connect(self.toggle_play_video)
+
+        self.ref_frame_textbox = QLineEdit(self)
+        self.ref_frame_textbox.setFocusPolicy(Qt.ClickFocus)
+        self.ref_frame_textbox.setText("0")
+        self.ref_frame_textbox.returnPressed.connect(self.onRefFrameTextboxReturn)
 
         self.points_list = QListWidget(self)
 
@@ -69,34 +82,30 @@ class VideoVisualizer(QMainWindow):
         box.addWidget(self.frame_num_textbox)
         box.addWidget(QLabel(f'out of {self.n_frames-1}'), 0)
         box.addStretch(10)
+        box.addWidget(QLabel('Pose reference frame:'), 0)
+        box.addWidget(self.ref_frame_textbox)
         #box.addWidget(self.play_button, 12)
 
-        self.displayFrame()
+        self.readNewFrame()
+        self.drawFrame()
 
     def getFrameNum(self):
         return self._frame_num
 
     def setFrameNum(self, frame_num):
-        try:
-            frame_num = int(frame_num)
+        frame_num = int(frame_num)
 
-            if frame_num < 0:
-                frame_num = self.n_frames - 1
-            elif frame_num >= self.n_frames:
-                frame_num = 0
+        if frame_num < 0:
+            frame_num = self.n_frames - 1
+        elif frame_num >= self.n_frames:
+            frame_num = 0
 
-            self.frame_num_textbox.setStyleSheet("")
+        # Only seek if necessary (it's expensive)
+        if self._frame_num != frame_num - 1:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
 
-            # Only seek if necessary (it's expensive)
-            if self._frame_num != frame_num - 1:
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
-
-            self._frame_num = frame_num
-            self.frameNumChanged.emit()
-            self.frame_num_textbox.setText(str(self._frame_num))
-
-        except ValueError:
-            self.frame_num_textbox.setStyleSheet("background-color: pink;")
+        self._frame_num = frame_num
+        self.frameNumChanged.emit()
 
     frame_num = Property(int, getFrameNum, setFrameNum, notify=frameNumChanged)
 
@@ -110,20 +119,62 @@ class VideoVisualizer(QMainWindow):
                 self.toggle_play_video()
 
     @Slot()
-    def displayFrame(self):
+    def readNewFrame(self):
         ret, frame = self.cap.read()
-        frame = cv2.resize(frame, self.scaled_size)
         if ret:
-            h, w, ch = frame.shape
-            bytes_per_line = ch * w
-            q_img = QImage(frame.data, w, h, bytes_per_line, QImage.Format_BGR888)
-            pixmap = QPixmap.fromImage(q_img)
-            self.video_panel.setPixmap(pixmap)
+            self.cur_frame = frame
 
     @Slot()
-    def onFrameInputReturn(self):
+    def drawFrame(self):
+        frame = self.cur_frame.copy()
+        idx = self.frame_num
+        h2, w2 = self.vid_h / 2, self.vid_w / 2
+
+        pts = np.array([
+            [w2 - 20, h2], [w2 + 20, h2], [w2, h2 - 20], [w2, h2 + 20]
+        ]).astype(int)
+
+        if idx in self.cpe:
+            H = utils.H_between_frames(self.cpe[idx], self.cpg[idx], self.vid_w, self.vid_h)
+            pts2 = utils.project_points(H, pts).astype(int)
+            for i in range(0, 4, 2):
+                cv2.line(frame, tuple(pts2[i]), tuple(pts2[i+1]), (0, 0, 255), 2)
+
+        for i in range(0, 4, 2):
+            cv2.line(frame, tuple(pts[i]), tuple(pts[i+1]), (0, 255, 0), 2)
+
+        frame = cv2.resize(frame, self.scaled_size)
+        h, w, ch = frame.shape
+        bytes_per_line = ch * w
+        q_img = QImage(frame.data, w, h, bytes_per_line, QImage.Format_BGR888)
+        pixmap = QPixmap.fromImage(q_img)
+        self.video_panel.setPixmap(pixmap)
+
+    @Slot()
+    def updateFrameNumTextbox(self):
+        self.frame_num_textbox.setStyleSheet("")
+        self.frame_num_textbox.setText(str(self._frame_num))
+
+    @Slot()
+    def onFrameNumTextboxReturn(self):
         self.setFocus()
-        self.frame_num = self.frame_num_textbox.text()
+        try:
+            self.frame_num = self.frame_num_textbox.text()
+            self.frame_num_textbox.setStyleSheet("")
+        except:
+            self.frame_num_textbox.setStyleSheet("background-color: pink;")
+
+    @Slot()
+    def onRefFrameTextboxReturn(self):
+        self.setFocus()
+        try:
+            ref_idx = int(self.ref_frame_textbox.text())
+            self.cpe, self.cpg = utils.set_ref_cam(ref_idx, self.cpe_orig, self.cpg_orig)
+            self.ref_frame_textbox.setStyleSheet("")
+        except:
+            self.ref_frame_textbox.setStyleSheet("background-color: pink;")
+            return
+        self.drawFrame()
 
     @Slot()
     def toggle_play_video(self):

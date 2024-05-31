@@ -66,7 +66,7 @@ class ImageMatcher:
             self.human_masks = human_masks.astype(np.uint8)
         self.keyframe_interval = keyframe_interval
 
-        self.orb_detector, self.orb_flann = sift_flann_factory(1000)#orb_flann_factory(2000)
+        self.orb_detector, self.orb_flann = orb_flann_factory(1000)
         self.sift_detector, self.sift_flann = sift_flann_factory(1000)
 
         self.orb_reliable = []

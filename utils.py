@@ -8,7 +8,11 @@ from matplotlib.axes import Axes
 from tqdm import tqdm
 import h5py
 
+from scipy.spatial.transform import Rotation as Rot
+
+import copy
 import re
+import os
 from pathlib import Path
 
 @dataclass
@@ -50,18 +54,6 @@ def sift_flann_factory(nfeatures=5000):
     )
     return detector, flann
 
-def akaze_flann_factory():
-    FLANN_INDEX_LSH = 6
-    detector = cv2.AKAZE_create()
-    flann = cv2.FlannBasedMatcher(
-        indexParams={
-            'algorithm': FLANN_INDEX_LSH,
-            'table_number': 16,
-            'key_size': 20,
-            'multi_probe_level': 2},
-        searchParams={'checks': 50},
-    )
-    return detector, flann
 
 lk_params = dict( winSize  = (15, 15),
                   maxLevel = 2,
@@ -342,10 +334,70 @@ def export_image_pairs(path: str, ps: list[ImagePair]):
         f.attrs['n_pairs'] = len(ps)
         f.create_dataset('cam_indices', data=sorted(indices.keys()))
 
-def import_optimized_cam_params(path: str) -> dict[np.ndarray]:
+def import_cam_params(path: str) -> dict[np.ndarray]:
     cam_params = {}
     with h5py.File(path, 'r') as f:
         for d in f.values():
             cam_idx = d.attrs['cam_idx']
             cam_params[cam_idx] = np.array(d)
     return cam_params
+
+def load_est_gt_poses(vid_path, vid_w):
+
+    vid_path = Path(vid_path)
+    data_dir = vid_path.parent
+    vid_stem = vid_path.stem
+
+    cam_params_raw = import_cam_params(
+        os.path.join(data_dir, vid_stem) + '-opt-poses.h5')
+
+    cam_params_est = {}
+    for i, p in sorted(cam_params_raw.items()):
+        cam_params_est[i] = {
+            'R': Rot.from_rotvec(p[:3], degrees=False).as_matrix(),
+            'hfov': 2 * np.degrees(np.arctan(vid_w * 0.5 / p[3])),
+        }
+
+    gt_path = os.path.join(data_dir, f'{vid_stem[:4]}.npy')
+
+    if not os.path.isfile(gt_path):
+        return cam_params_est, None
+
+    gt = np.load(gt_path)
+    cam_params_gt = {}
+    for i in sorted(cam_params_est.keys()):
+        p = gt[i]
+        cam_params_gt[i] = {
+            'R': Rot.from_euler('YXZ', p[:3], degrees=True).as_matrix(),
+            'hfov': p[3],
+        }
+
+    return cam_params_est, cam_params_gt
+
+def set_ref_cam(ref_cam_idx, cam_params_est, cam_params_gt):
+
+    cpe = copy.deepcopy(cam_params_est)
+    cpg = copy.deepcopy(cam_params_gt)
+
+    R = cpe[ref_cam_idx]['R'].T.copy()
+    for p in cpe.values():
+        p['R'] = R @ p['R']
+
+    R = cpg[ref_cam_idx]['R'].T.copy()
+    for p in cpg.values():
+        p['R'] = R @ p['R']
+
+    return cpe, cpg
+
+def hfov_to_K(hfov_degrees, w, h):
+    f = 0.5 * w / np.tan(np.radians(hfov_degrees / 2))
+    K = np.array([[-f, 0, w/2], [0, f, h/2], [0, 0, 1]])
+    return K
+
+def H_between_frames(p0, p1, w, h):
+    """ Compute transformation H from image plane of p0 to p1"""
+    R0, R1 = p0['R'], p1['R']
+    K0 = hfov_to_K(p0['hfov'], w, h)
+    K1 = hfov_to_K(p1['hfov'], w, h)
+    H = K1 @ R1.T @ R0 @ np.linalg.inv(K0)
+    return H
