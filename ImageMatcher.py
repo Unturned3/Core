@@ -23,6 +23,7 @@ class ImagePair:
 
     i: int = None
     j: int = None
+    still: bool = False
 
 
 def orb_flann_factory(nfeatures=5000):
@@ -158,7 +159,7 @@ class ImageMatcher:
                 print(f'Warning: {len(src_pts)} matches after homography RANSAC is below threshold.')
             return None
 
-        return ImagePair(self.images[i], self.images[j], H, src_pts, dst_pts, i, j)
+        return ImagePair(self.images[i], self.images[j], H, src_pts, dst_pts, i, j, False)
 
     def find_H(self, p0, p1, good):
         src_pts, dst_pts = p0[good].reshape(-1, 2), p1[good].reshape(-1, 2)
