@@ -1,9 +1,14 @@
 #version 330
 
 in vec3 vert;
+out vec4 v_color;
 
 uniform vec4 color;
 
+uniform mat4 proj;
+uniform mat4 view;
+
+/*
 uniform float z_near;
 uniform float z_far;
 uniform float fovy;
@@ -12,8 +17,6 @@ uniform float ratio;
 uniform vec3 center;
 uniform vec3 eye;
 uniform vec3 up;
-
-out vec4 v_color;
 
 mat4 perspective() {
     float zmul = (-2.0 * z_near * z_far) / (z_far - z_near);
@@ -40,8 +43,10 @@ mat4 lookat() {
         -dot(eye, side), -dot(eye, upward), dot(eye, forward), 1
     );
 }
+*/
 
 void main() {
-    gl_Position = perspective() * lookat() * vec4(vert, 1.0);
+    //gl_Position = perspective() * lookat() * vec4(vert, 1.0);
+    gl_Position = proj * view * vec4(vert, 1.0);
     v_color = color;
 }

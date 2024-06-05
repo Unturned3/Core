@@ -1,17 +1,44 @@
 
 import sys
+from dataclasses import dataclass
 import cv2
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QLineEdit, QWidget,
-    QListWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QPushButton
+    QListWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QPushButton,
+    QListWidgetItem,
 )
 from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, Property
 
-from QtComponents import ImagePanel, ToggleButton, HVBoxLayout
+from QtComponents import ImagePanel, ToggleButton, HVBoxLayout, MarkerList
 
 import numpy as np
+from numpy.typing import NDArray
 import utils
+
+from PolyRenderer import PolyMarker, PolyRenderer3D
+
+
+np.set_printoptions(precision=4, suppress=True)
+
+@dataclass
+class Marker(QListWidgetItem):
+    uid: int
+    frame_num: int
+    screen_xy: NDArray[np.float64]
+    world_xyz: NDArray[np.float64]
+
+    def __post_init__(self):
+        super().__init__()
+        self.updateText()
+
+    def updateText(self):
+        fmt_arr = np.array2string(
+            self.world_xyz,
+            formatter={'float_kind': lambda x: f"{x:.4f}"}
+        )
+        self.setText(f'{self.uid}, {self.frame_num}, {fmt_arr}')
+
 
 class VideoVisualizer(QMainWindow):
 
@@ -35,7 +62,30 @@ class VideoVisualizer(QMainWindow):
         self.cpe_orig, self.cpg_orig = utils.load_est_gt_poses(video_path, self.vid_w)
         self.cpe, self.cpg = utils.set_ref_cam(0, self.cpe_orig, self.cpg_orig)
 
+        Xs = [p['R'][:, 0] for p in self.cpe.values()]
+        up_vec = utils.compute_up_vector(Xs)
+
+        # Use scipy to find the rotation matrix that rotates the up vector to the y-axis
+        from scipy.spatial.transform import Rotation as Rot
+        R = Rot.align_vectors([[0, 1, 0]], [up_vec])[0].as_matrix()
+
+        for p in self.cpe.values():
+            p['R'] = R @ p['R']
+        for p in self.cpg.values():
+            p['R'] = R @ p['R']
+
         self.video_is_playing = False
+        self.selectedMarker = None
+        self.marker_count = 0
+
+        self.poly_renderer = PolyRenderer3D(self.vid_w, self.vid_h)
+        #verts = np.array([
+        #    -1, -1, -2,
+        #    -1,  0, -2,
+        #     0,  0, -2,
+        #]).reshape(-1, 3)
+        #self.poly_renderer.create_poly(1, (0.0, 1.0, 0.0, 1.0), verts)
+
 
         self._frame_num = 0
         self.frameNumChanged.connect(self.readNewFrame)
@@ -61,22 +111,24 @@ class VideoVisualizer(QMainWindow):
         self.frame_num_textbox.returnPressed.connect(self.onFrameNumTextboxReturn)
         self.frame_num_textbox.setFocusPolicy(Qt.ClickFocus)
 
-        #self.play_button = ToggleButton(self, "Play", "Pause")
-        #self.play_button.clicked.connect(self.toggle_play_video)
-
         self.ref_frame_textbox = QLineEdit(self)
         self.ref_frame_textbox.setFocusPolicy(Qt.ClickFocus)
         self.ref_frame_textbox.setText("0")
         self.ref_frame_textbox.returnPressed.connect(self.onRefFrameTextboxReturn)
+        # Disabled for now because we're using a precomputed ground plane
+        self.ref_frame_textbox.setEnabled(False)
+        self.ref_frame_textbox.setText("(n/a)")
 
-        self.points_list = QListWidget(self)
+        self.marker_list: QListWidget = MarkerList(self)
+        self.marker_list.itemSelectionChanged.connect(self.onMarkerListSelectionChange)
+        self.marker_list.itemDoubleClicked.connect(self.onMarkerListItemDoubleClick)
 
         self.container = QWidget(self)
         self.setCentralWidget(self.container)
 
         box = HVBoxLayout(self.container)
         box.addWidget(self.video_panel)
-        box.addWidget(self.points_list)
+        box.addWidget(self.marker_list)
         box.newline()
         box.addWidget(QLabel('Frame'), 0)
         box.addWidget(self.frame_num_textbox)
@@ -84,7 +136,6 @@ class VideoVisualizer(QMainWindow):
         box.addStretch(10)
         box.addWidget(QLabel('Pose reference frame:'), 0)
         box.addWidget(self.ref_frame_textbox)
-        #box.addWidget(self.play_button, 12)
 
         self.readNewFrame()
         self.drawFrame()
@@ -143,6 +194,13 @@ class VideoVisualizer(QMainWindow):
         for i in range(0, 4, 2):
             cv2.line(frame, tuple(pts[i]), tuple(pts[i+1]), (0, 255, 0), 2)
 
+        center = -self.cpe[idx]['R'][:, 2]
+        up = self.cpe[idx]['R'][:, 1]
+        hfov = self.cpe[idx]['hfov']
+        overlay = self.poly_renderer.render(center, up, hfov)
+
+        frame = cv2.addWeighted(frame, 0.5, overlay, 0.5, 0)
+
         frame = cv2.resize(frame, self.scaled_size)
         h, w, ch = frame.shape
         bytes_per_line = ch * w
@@ -190,10 +248,49 @@ class VideoVisualizer(QMainWindow):
 
     @Slot()
     def onVideoPanelClick(self, pos):
+        if self.video_is_playing:
+            return
+
         x = pos.x()
         y = pos.y()
-        self.points_list.addItem(f"({x}, {y})")
+        screen_xy = np.array([[x, y]])
+        M = utils.view_to_world(self.cpe[self.frame_num], self.vid_w, self.vid_h)
 
+        # NOTE: using M to "un-project" the screen points into the world only
+        # preserves the direction information. Since we set the homogeneous
+        # component of the vector to 1 by convention, this component being
+        # interpreted as the z-coordinate of the world point results in the
+        # point landing _behind_ the camera. Therefore we negate the vector.
+        world_xyz = utils.project_points(
+            M, np.array([[x, y]]),
+            keep_z=True) * -1
+
+        if world_xyz[0, 1] >= 0:
+            return  # Not a valid point on the virtual ground plane
+
+        # Extend the vector to the ground plane (y = -1)
+        world_xyz /= -world_xyz[0, 1]
+
+        if self.selectedMarker is not None:
+            m = self.selectedMarker
+            m.frame_num = self.frame_num
+            m.screen_xy = screen_xy
+            m.world_xyz = world_xyz
+            m.updateText()
+        else:
+            self.marker_count += 1
+            m = Marker(self.marker_count, self.frame_num, screen_xy, world_xyz)
+            self.marker_list.addItem(m)
+
+    @Slot()
+    def onMarkerListSelectionChange(self):
+        length = len(self.marker_list.selectedItems())
+        assert length in (0, 1)
+        self.selectedMarker = self.marker_list.selectedItems()[0] if length == 1 else None
+
+    @Slot()
+    def onMarkerListItemDoubleClick(self):
+        self.frame_num = self.selectedMarker.frame_num
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

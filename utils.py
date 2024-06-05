@@ -183,13 +183,30 @@ def hfov_to_K(hfov_degrees, w, h):
     K = np.array([[-f, 0, w/2], [0, f, h/2], [0, 0, 1]])
     return K
 
+def view_to_world(p, w, h):
+    R = p['R']
+    K = hfov_to_K(p['hfov'], w, h)
+    return R @ np.linalg.inv(K)
+
 def H_between_frames(p0, p1, w, h):
     """ Compute transformation H from image plane of p0 to p1"""
-    R0, R1 = p0['R'], p1['R']
-    K0 = hfov_to_K(p0['hfov'], w, h)
-    K1 = hfov_to_K(p1['hfov'], w, h)
-    H = K1 @ R1.T @ R0 @ np.linalg.inv(K0)
-    return H
+    M0 = view_to_world(p0, w, h)
+    M1 = view_to_world(p1, w, h)
+    return np.linalg.inv(M1) @ M0
+
+def compute_up_vector(Xs):
+    # Ensure the input is a numpy array
+    Xs = np.array(Xs)
+
+    # Calculate the matrix as the sum of outer products
+    C = np.sum([np.outer(p, p) for p in Xs], axis=0)
+
+    # Compute the eigenvalues and eigenvectors
+    eigenvalues, eigenvectors = np.linalg.eig(C)
+
+    # Find the eigenvector corresponding to the smallest eigenvalue
+    up_vector = eigenvectors[:, np.argmin(eigenvalues)]
+    return up_vector
 
 def avg_quad_angular_velocity(p: ImagePair, cam_params):
     h, w = p.img1.shape
@@ -207,3 +224,30 @@ def avg_quad_angular_velocity(p: ImagePair, cam_params):
     f = hfov_to_K(cam_params['hfov'], w, h)[1, 1]
     v = np.mean(vs)
     return np.degrees(np.arctan(v / f))
+
+def plot_vectors(points):
+    # Ensure the input is a numpy array
+    points = np.array(points)
+
+    # Create a 3D plot
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    # Origin
+    origin = np.zeros((points.shape[0], 3))
+
+    # Plot the vectors
+    for i in range(points.shape[0]):
+        ax.quiver(0, 0, 0, points[i, 0], points[i, 1], points[i, 2], color='b', arrow_length_ratio=0.1)
+
+    # Setting the labels
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+
+    # Setting the title
+    ax.set_title('3D Vectors from Origin')
+
+    # Show the plot
+    plt.show()
+
