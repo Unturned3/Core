@@ -1,5 +1,5 @@
 
-import sys
+import sys, traceback
 from dataclasses import dataclass
 import cv2
 from PySide6.QtWidgets import (
@@ -78,6 +78,7 @@ class VideoVisualizer(QMainWindow):
         self.selectedMarker = None
         self.marker_count = 0
 
+        self.poly_count = 0
         self.poly_renderer = PolyRenderer3D(self.vid_w, self.vid_h)
         #verts = np.array([
         #    -1, -1, -2,
@@ -111,6 +112,10 @@ class VideoVisualizer(QMainWindow):
         self.frame_num_textbox.returnPressed.connect(self.onFrameNumTextboxReturn)
         self.frame_num_textbox.setFocusPolicy(Qt.ClickFocus)
 
+        self.create_poly_textbox = QLineEdit(self)
+        self.create_poly_textbox.returnPressed.connect(self.onCreatePolyTextboxReturn)
+        self.create_poly_textbox.setFocusPolicy(Qt.ClickFocus)
+
         self.ref_frame_textbox = QLineEdit(self)
         self.ref_frame_textbox.setFocusPolicy(Qt.ClickFocus)
         self.ref_frame_textbox.setText("0")
@@ -127,13 +132,17 @@ class VideoVisualizer(QMainWindow):
         self.setCentralWidget(self.container)
 
         box = HVBoxLayout(self.container)
+
         box.addWidget(self.video_panel)
         box.addWidget(self.marker_list)
         box.newline()
+
         box.addWidget(QLabel('Frame'), 0)
         box.addWidget(self.frame_num_textbox)
         box.addWidget(QLabel(f'out of {self.n_frames-1}'), 0)
-        box.addStretch(10)
+        box.addStretch(5)
+        box.addWidget(QLabel(f'Create poly:'), 0)
+        box.addWidget(self.create_poly_textbox, 5)
         box.addWidget(QLabel('Pose reference frame:'), 0)
         box.addWidget(self.ref_frame_textbox)
 
@@ -199,7 +208,7 @@ class VideoVisualizer(QMainWindow):
         hfov = self.cpe[idx]['hfov']
         overlay = self.poly_renderer.render(center, up, hfov)
 
-        frame = cv2.addWeighted(frame, 0.5, overlay, 0.5, 0)
+        frame = cv2.addWeighted(frame, 0.8, overlay, 0.2, 0)
 
         frame = cv2.resize(frame, self.scaled_size)
         h, w, ch = frame.shape
@@ -291,6 +300,31 @@ class VideoVisualizer(QMainWindow):
     @Slot()
     def onMarkerListItemDoubleClick(self):
         self.frame_num = self.selectedMarker.frame_num
+
+    @Slot()
+    def onCreatePolyTextboxReturn(self):
+        try:
+            self.setFocus()
+            ids = [int(i) for i in self.create_poly_textbox.text().split()]
+            world_xyzs = []
+            for i in range(self.marker_list.count()):
+                m = self.marker_list.item(i)
+                if m.uid in ids:
+                    world_xyzs.append(m.world_xyz)
+            self.poly_count += 1
+            self.poly_renderer.create_poly(
+                self.poly_count,
+                (0.0, 1.0, 0.0, 1.0),
+                np.array(world_xyzs),
+            )
+            self.create_poly_textbox.setText("")
+            self.create_poly_textbox.setStyleSheet("")
+            self.drawFrame()
+        except Exception as e:
+            print(e)
+            traceback.print_exc()
+            self.create_poly_textbox.setStyleSheet("background-color: pink;")
+            return
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
