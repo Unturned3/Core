@@ -1,5 +1,5 @@
 
-import sys, traceback
+import sys, traceback, copy
 from dataclasses import dataclass
 import cv2
 from PySide6.QtWidgets import (
@@ -60,19 +60,25 @@ class VideoVisualizer(QMainWindow):
         self.scaled_size = (640, int(self.vid_h * self.vid_scale))
 
         self.cpe_orig, self.cpg_orig = utils.load_est_gt_poses(video_path, self.vid_w)
-        self.cpe, self.cpg = utils.set_ref_cam(0, self.cpe_orig, self.cpg_orig)
+        self.gt_available = self.cpg_orig is not None
+
+        if self.gt_available:
+            self.cpe, self.cpg = utils.set_ref_cam(0, self.cpe_orig, self.cpg_orig)
+        else:
+            self.cpe = copy.deepcopy(self.cpe_orig)
 
         Xs = [p['R'][:, 0] for p in self.cpe.values()]
         up_vec = utils.compute_up_vector(Xs)
 
-        # Use scipy to find the rotation matrix that rotates the up vector to the y-axis
         from scipy.spatial.transform import Rotation as Rot
         R = Rot.align_vectors([[0, 1, 0]], [up_vec])[0].as_matrix()
 
         for p in self.cpe.values():
             p['R'] = R @ p['R']
-        for p in self.cpg.values():
-            p['R'] = R @ p['R']
+
+        if self.gt_available:
+            for p in self.cpg.values():
+                p['R'] = R @ p['R']
 
         self.video_is_playing = False
         self.selectedMarker = None
@@ -80,13 +86,6 @@ class VideoVisualizer(QMainWindow):
 
         self.poly_count = 0
         self.poly_renderer = PolyRenderer3D(self.vid_w, self.vid_h)
-        #verts = np.array([
-        #    -1, -1, -2,
-        #    -1,  0, -2,
-        #     0,  0, -2,
-        #]).reshape(-1, 3)
-        #self.poly_renderer.create_poly(1, (0.0, 1.0, 0.0, 1.0), verts)
-
 
         self._frame_num = 0
         self.frameNumChanged.connect(self.readNewFrame)
@@ -190,18 +189,19 @@ class VideoVisualizer(QMainWindow):
         idx = self.frame_num
         h2, w2 = self.vid_h / 2, self.vid_w / 2
 
-        pts = np.array([
-            [w2 - 20, h2], [w2 + 20, h2], [w2, h2 - 20], [w2, h2 + 20]
-        ]).astype(int)
+        if self.gt_available:
+            pts = np.array([
+                [w2 - 20, h2], [w2 + 20, h2], [w2, h2 - 20], [w2, h2 + 20]
+            ]).astype(int)
 
-        if idx in self.cpe:
-            H = utils.H_between_frames(self.cpe[idx], self.cpg[idx], self.vid_w, self.vid_h)
-            pts2 = utils.project_points(H, pts).astype(int)
+            if idx in self.cpe:
+                H = utils.H_between_frames(self.cpe[idx], self.cpg[idx], self.vid_w, self.vid_h)
+                pts2 = utils.project_points(H, pts).astype(int)
+                for i in range(0, 4, 2):
+                    cv2.line(frame, tuple(pts2[i]), tuple(pts2[i+1]), (0, 0, 255), 2)
+
             for i in range(0, 4, 2):
-                cv2.line(frame, tuple(pts2[i]), tuple(pts2[i+1]), (0, 0, 255), 2)
-
-        for i in range(0, 4, 2):
-            cv2.line(frame, tuple(pts[i]), tuple(pts[i+1]), (0, 255, 0), 2)
+                cv2.line(frame, tuple(pts[i]), tuple(pts[i+1]), (0, 255, 0), 2)
 
         center = -self.cpe[idx]['R'][:, 2]
         up = self.cpe[idx]['R'][:, 1]
