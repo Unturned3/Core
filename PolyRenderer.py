@@ -25,10 +25,10 @@ class PolyRenderer3D():
 
         self.ctx = moderngl.create_standalone_context()
 
-        with open('vert_shader.glsl', 'r') as f:
+        with open('shaders/vert.glsl', 'r') as f:
             self.vert_shader_src = f.read()
 
-        with open('frag_shader.glsl', 'r') as f:
+        with open('shaders/frag.glsl', 'r') as f:
             self.frag_shader_src = f.read()
 
         self.prog = self.ctx.program(
@@ -41,12 +41,38 @@ class PolyRenderer3D():
         self.fbo.use()
 
         self.polys: dict[int, PolyMarker] = {}
+        self.verts: dict[int, NDArray[np.float32]] = {}
+
+        self.M_proj = None
+        self.M_view = None
 
     def _hfov_to_vfov(self, hfov):
         hfov_rad = np.radians(hfov)
         vfov_rad = 2 * np.arctan(np.tan(hfov_rad / 2) / self.aspect_ratio)
         vfov_deg = np.degrees(vfov_rad)
         return vfov_deg
+
+    def _world_to_screen(self, verts: dict) -> dict:
+        out = {}
+        for uid, v in verts.items():
+            # Transform vertex to clip space
+            # NOTE: check why is the transpose needed. I think it's because
+            # the matrices that pyrr create for OpenGL are col-major.
+            v_clip = self.M_proj.T @ self.M_view.T @ np.array([*v, 1.0])
+            v_clip = np.array(v_clip)
+            # Perspective division to normalized device coordinates
+            ndc = v_clip / v_clip[3]
+            # Viewport transform
+            x = int((ndc[0] * 0.5 + 0.5) * self.width)
+            y = int((1 - (ndc[1] * 0.5 + 0.5)) * self.height)
+            out[uid] = (x, y, ndc[2], ndc[3])
+        return out
+
+    def _is_visible(self, vert):
+        x, y, z, _ = vert
+        return 0 <= x < self.width and \
+               0 <= y < self.height and \
+               z >= -1 and z <= 1
 
     def create_poly(self, uid, color, verts):
         verts = np.array(verts, dtype='f4')
@@ -57,28 +83,33 @@ class PolyRenderer3D():
         m = PolyMarker(uid, color, verts, vbo, vao)
         self.polys[uid] = m
 
-    def render(self, center, up, hfov):
+    def set_cam_pose(self, lookat, up, hfov):
         vfov = self._hfov_to_vfov(hfov)
-        self.prog['proj'].write(
-            M44.perspective_projection(
-                vfov, self.aspect_ratio, 0.1, 1000, dtype='f4'
-            ).tobytes()
-        )
-        self.prog['view'].write(
-            M44.look_at((0, 0, 0), center, up, dtype='f4').tobytes()
-        )
+        self.M_proj = M44.perspective_projection(vfov, self.aspect_ratio,
+                                               0.1, 1000, dtype='f4')
+        self.M_view = M44.look_at((0, 0, 0), lookat, up, dtype='f4')
+        self.prog['proj'].write(self.M_proj.tobytes())
+        self.prog['view'].write(self.M_view.tobytes())
 
+    def render(self):
         self.ctx.clear(0.0, 0.0, 0.0, 1.0)
 
         for p in self.polys.values():
             self.prog['color'].value = p.color
             p.vao.render(moderngl.TRIANGLE_FAN)
 
-        data = np.frombuffer(self.fbo.read(components=3), dtype=np.uint8)
-        data = data.reshape((self.height, self.width, 3))
-        data = np.flipud(data)
-        data = cv2.cvtColor(data, cv2.COLOR_RGB2BGR)
-        return data
+        frame = np.frombuffer(self.fbo.read(components=3), dtype=np.uint8)
+        frame = frame.reshape((self.height, self.width, 3))
+        frame = np.flipud(frame)
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+        for uid, v in self._world_to_screen(self.verts).items():
+            if self._is_visible(v):
+                cv2.circle(frame, (v[0], v[1]), 4, (0, 0, 255), -1)
+                cv2.putText(frame, f'{uid}', (v[0] + 5, v[1] + 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+        return frame
 
 if __name__ == '__main__':
     cv2.namedWindow('Window')

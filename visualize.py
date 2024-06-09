@@ -203,12 +203,13 @@ class VideoVisualizer(QMainWindow):
             for i in range(0, 4, 2):
                 cv2.line(frame, tuple(pts[i]), tuple(pts[i+1]), (0, 255, 0), 2)
 
-        center = -self.cpe[idx]['R'][:, 2]
+        lookat = -self.cpe[idx]['R'][:, 2]
         up = self.cpe[idx]['R'][:, 1]
         hfov = self.cpe[idx]['hfov']
-        overlay = self.poly_renderer.render(center, up, hfov)
+        self.poly_renderer.set_cam_pose(lookat, up, hfov)
+        overlay = self.poly_renderer.render()
 
-        frame = cv2.addWeighted(frame, 0.8, overlay, 0.2, 0)
+        frame = cv2.addWeighted(frame, 0.5, overlay, 0.5, 0)
 
         frame = cv2.resize(frame, self.scaled_size)
         h, w, ch = frame.shape
@@ -290,6 +291,9 @@ class VideoVisualizer(QMainWindow):
             self.marker_count += 1
             m = Marker(self.marker_count, self.frame_num, screen_xy, world_xyz)
             self.marker_list.addItem(m)
+        self.poly_renderer.verts[m.uid] = world_xyz.ravel()
+
+        self.drawFrame()
 
     @Slot()
     def onMarkerListSelectionChange(self):

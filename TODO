@@ -1,0 +1,17 @@
+
+Problem: if we're displaying anything other than 640x480, then we resize the vid
+such that the width is 640. However, when we're collecting vid clicks to form
+polygon vertices, we forgot to account for this resizing, which will lead to
+incorrect coordinates.
+
+
+Marker label rendering
+
+Allow poly updates after label coords are changed
+
+Map visualization & actual crowd density estimation
+
+Save markers
+
+
+

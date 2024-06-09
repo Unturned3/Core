@@ -66,19 +66,23 @@ def reprojection_error(H, src_pts, dst_pts, plot=False):
     return np.sqrt(np.square(proj_pts - dst_pts).sum(axis=1)).mean()
 
 
-def visualize_matches(pair: ImagePair):
+def visualize_matches(pair: ImagePair, dpi=100, masks=None):
 
     axs: tuple[Axes]
-    fig, axs = plt.subplots(1, 2, dpi=100)
+    fig, axs = plt.subplots(1, 2, dpi=dpi)
     a1, a2 = axs
 
     for a in axs:
         a.set_axis_off()
 
     a1.imshow(pair.img1, 'gray')
+    if masks is not None:
+        a1.imshow(masks[pair.i], 'jet', alpha=0.4)
     a1.scatter(*pair.src_pts.T, c='lime', marker='.', s=1, lw=1)
 
     a2.imshow(pair.img2, 'gray')
+    if masks is not None:
+        a2.imshow(masks[pair.j], 'jet', alpha=0.4)
     a2.scatter(*pair.dst_pts.T, c='lime', marker='.', s=1, lw=1)
 
     fig.tight_layout()

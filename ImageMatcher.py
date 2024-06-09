@@ -51,6 +51,15 @@ def sift_flann_factory(nfeatures=5000):
     )
     return detector, flann
 
+lk_params = dict( winSize  = (25, 25),
+                  maxLevel = 4,
+                  criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
+
+feature_params = dict( maxCorners = 2000,
+                       qualityLevel = 0.3,
+                       minDistance = 7,
+                       blockSize = 7 )
+
 
 class ImageMatcher:
 
@@ -189,9 +198,55 @@ class ImageMatcher:
 
         assert len(src_pts) == len(dst_pts)
 
-        if len(src_pts) < 50:
+        if len(src_pts) < 40:
             print(f'Warning: {len(src_pts)} matches after homography RANSAC is below threshold.')
             return None, None, None
 
         return H, src_pts, dst_pts
 
+    def lk_track(self) -> list[ImagePair]:
+        image_pairs = []
+        tracks = []
+        prev_frame = None
+        track_len = 4
+        detect_interval = 2
+        for i in tqdm(range(0, len(self.images))):
+            frame = self.images[i]
+            if len(tracks) > 0:
+                img0, img1 = prev_frame, frame
+                p0 = np.float32([t[-1] for t in tracks]).reshape(-1, 1, 2)
+                p1, *_ = cv2.calcOpticalFlowPyrLK(img0, img1, p0, None, **lk_params)
+                p0r, *_ = cv2.calcOpticalFlowPyrLK(img1, img0, p1, None, **lk_params)
+                d = abs(p0-p0r).reshape(-1, 2).max(-1)
+                good = d < 1
+                new_tracks = []
+
+                H, sp, dp = self.find_H(p0, p1, good)
+
+                if H is None:
+                    print(f'Warning: failed to find homography between frame {i-1} to {i}.')
+                else:
+                    image_pairs.append(ImagePair(img0, img1, H, sp, dp, i-1, i, False))
+
+                for tr, (x, y), good_flag in zip(tracks, p1.reshape(-1, 2), good):
+                    if not good_flag:
+                        continue
+                    tr.append((x, y))
+                    if len(tr) > track_len:
+                        del tr[0]
+                    new_tracks.append(tr)
+                tracks = new_tracks
+
+            if i % detect_interval == 0:
+                mask = np.zeros_like(frame)
+                mask[:] = 255
+                for x, y in [np.int32(tr[-1]) for tr in tracks]:
+                    cv2.circle(mask, (x, y), 5, 0, -1)
+                p = cv2.goodFeaturesToTrack(frame, mask=mask, **feature_params)
+                #p = self.orb_detector.detect(frame, mask=mask)
+                #p = np.array([kp.pt for kp in p])
+                if p is not None:
+                    for x, y in np.float32(p).reshape(-1, 2):
+                        tracks.append([(x, y)])
+            prev_frame = frame
+        return image_pairs
