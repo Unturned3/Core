@@ -92,22 +92,22 @@ class PolyRenderer3D():
         self.prog['view'].write(self.M_view.tobytes())
 
     def render(self):
-        self.ctx.clear(0.0, 0.0, 0.0, 1.0)
+        self.ctx.clear(0.0, 0.0, 0.0, 0.0)
 
         for p in self.polys.values():
             self.prog['color'].value = p.color
             p.vao.render(moderngl.TRIANGLE_FAN)
 
-        frame = np.frombuffer(self.fbo.read(components=3), dtype=np.uint8)
-        frame = frame.reshape((self.height, self.width, 3))
+        frame = np.frombuffer(self.fbo.read(components=4), dtype=np.uint8)
+        frame = frame.reshape((self.height, self.width, 4))
         frame = np.flipud(frame)
-        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGRA)
 
         for uid, v in self._world_to_screen(self.verts).items():
             if self._is_visible(v):
-                cv2.circle(frame, (v[0], v[1]), 4, (0, 0, 255), -1)
+                cv2.circle(frame, (v[0], v[1]), 4, (0, 0, 255, 255), -1)
                 cv2.putText(frame, f'{uid}', (v[0] + 5, v[1] + 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255, 255), 2)
 
         return frame
 

@@ -255,3 +255,19 @@ def plot_vectors(points):
     # Show the plot
     plt.show()
 
+def alpha_blend(fg_img, bg_img):
+
+    assert fg_img.shape[2] == 4, 'Foreground image must have 4 channels (RGBA)'
+
+    # Ensure the input images are in float format
+    fg_img = fg_img.astype(float) / 255
+    bg_img = bg_img.astype(float) / 255
+
+    # Extract the alpha channel from the foreground image
+    alpha = fg_img[:, :, 3:4]
+
+    # Perform alpha blending
+    blended_img = fg_img[:, :, :3] * alpha + bg_img[:, :, :3] * (1 - alpha)
+
+    return (blended_img * 255).astype(np.uint8)
+

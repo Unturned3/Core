@@ -209,7 +209,10 @@ class VideoVisualizer(QMainWindow):
         self.poly_renderer.set_cam_pose(lookat, up, hfov)
         overlay = self.poly_renderer.render()
 
-        frame = cv2.addWeighted(frame, 0.5, overlay, 0.5, 0)
+        #overlay[:, :, 3] = 255
+        #print("min/max:", overlay[:,:,3].min(), overlay[:,:,3].max())
+        frame = utils.alpha_blend(overlay, frame)
+        #frame = cv2.addWeighted(frame, 0.5, overlay, 0.5, 0)
 
         frame = cv2.resize(frame, self.scaled_size)
         h, w, ch = frame.shape
@@ -318,7 +321,7 @@ class VideoVisualizer(QMainWindow):
             self.poly_count += 1
             self.poly_renderer.create_poly(
                 self.poly_count,
-                (0.0, 1.0, 0.0, 1.0),
+                (0.0, 1.0, 0.0, 0.5),
                 np.array(world_xyzs),
             )
             self.create_poly_textbox.setText("")
