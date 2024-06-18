@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pyrr import Matrix44 as M44
 
 @dataclass
-class PolyMarker:
+class _Polygon:
     uid: int
     color: tuple[float, float, float, float]
     verts: NDArray[np.float32]
@@ -40,7 +40,7 @@ class PolyRenderer3D():
             self.ctx.texture((self.width, self.height), 4)])
         self.fbo.use()
 
-        self.polys: dict[int, PolyMarker] = {}
+        self.polys: dict[int, _Polygon] = {}
         self.verts: dict[int, NDArray[np.float32]] = {}
 
         self.M_proj = None
@@ -80,7 +80,7 @@ class PolyRenderer3D():
         vao = self.ctx.vertex_array(
             self.prog, [(vbo, '3f', 'vert')]
         )
-        m = PolyMarker(uid, color, verts, vbo, vao)
+        m = _Polygon(uid, color, verts, vbo, vao)
         self.polys[uid] = m
 
     def set_cam_pose(self, lookat, up, hfov):
@@ -91,23 +91,25 @@ class PolyRenderer3D():
         self.prog['proj'].write(self.M_proj.tobytes())
         self.prog['view'].write(self.M_view.tobytes())
 
-    def render(self):
+    def render(self, showPolys, showMarkers):
         self.ctx.clear(0.0, 0.0, 0.0, 0.0)
 
-        for p in self.polys.values():
-            self.prog['color'].value = p.color
-            p.vao.render(moderngl.TRIANGLE_FAN)
+        if showPolys:
+            for p in self.polys.values():
+                self.prog['color'].value = p.color
+                p.vao.render(moderngl.TRIANGLE_FAN)
 
         frame = np.frombuffer(self.fbo.read(components=4), dtype=np.uint8)
         frame = frame.reshape((self.height, self.width, 4))
         frame = np.flipud(frame)
         frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGRA)
 
-        for uid, v in self._world_to_screen(self.verts).items():
-            if self._is_visible(v):
-                cv2.circle(frame, (v[0], v[1]), 4, (0, 0, 255, 255), -1)
-                cv2.putText(frame, f'{uid}', (v[0] + 5, v[1] + 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255, 255), 2)
+        if showMarkers:
+            for uid, v in self._world_to_screen(self.verts).items():
+                if self._is_visible(v):
+                    cv2.circle(frame, (v[0], v[1]), 4, (0, 0, 255, 255), -1)
+                    cv2.putText(frame, f'{uid}', (v[0] + 5, v[1] + 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255, 255), 2)
 
         return frame
 

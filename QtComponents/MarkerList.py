@@ -23,6 +23,11 @@ class MarkerList(QListWidget):
     def mousePressEvent(self, event):
         pass
 
+    def mouseDoubleClickEvent(self, event):
+        item = self.itemAt(event.pos())
+        if item is not None:
+            self.itemDoubleClicked.emit(item)
+
     def mouseReleaseEvent(self, event):
         item = self.itemAt(event.pos())
         if item is not None:

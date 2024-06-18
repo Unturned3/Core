@@ -5,7 +5,7 @@ import cv2
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QLineEdit, QWidget,
     QListWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QPushButton,
-    QListWidgetItem,
+    QListWidgetItem, QSlider,
 )
 from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, Property
@@ -16,7 +16,7 @@ import numpy as np
 from numpy.typing import NDArray
 import utils
 
-from PolyRenderer import PolyMarker, PolyRenderer3D
+from PolyRenderer import PolyRenderer3D
 
 
 np.set_printoptions(precision=4, suppress=True)
@@ -25,7 +25,8 @@ np.set_printoptions(precision=4, suppress=True)
 class Marker(QListWidgetItem):
     uid: int
     frame_num: int
-    screen_xy: NDArray[np.float64]
+    vid_xy: NDArray[np.float64]
+    map_xy: NDArray[np.float64]
     world_xyz: NDArray[np.float64]
 
     def __post_init__(self):
@@ -39,6 +40,11 @@ class Marker(QListWidgetItem):
         )
         self.setText(f'{self.uid}, {self.frame_num}, {fmt_arr}')
 
+@dataclass
+class PolyMarker:
+    uid: int
+    color: tuple[float, float, float, float]
+    verts: NDArray[np.float32]
 
 class VideoVisualizer(QMainWindow):
 
@@ -54,12 +60,11 @@ class VideoVisualizer(QMainWindow):
         self.n_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self.vid_fps = int(self.cap.get(cv2.CAP_PROP_FPS))
 
-        self.vid_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        self.vid_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        self.vid_scale = 640 / self.vid_w
-        self.scaled_size = (640, int(self.vid_h * self.vid_scale))
+        self.real_vid_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.real_vid_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.vid_disp_scale = 640 / self.real_vid_w
 
-        self.cpe_orig, self.cpg_orig = utils.load_est_gt_poses(video_path, self.vid_w)
+        self.cpe_orig, self.cpg_orig = utils.load_est_gt_poses(video_path, self.real_vid_w)
         self.gt_available = self.cpg_orig is not None
 
         if self.gt_available:
@@ -80,12 +85,16 @@ class VideoVisualizer(QMainWindow):
             for p in self.cpg.values():
                 p['R'] = R @ p['R']
 
+        self.showPolys = True
+        self.showMarkers = True
+        self.showCross = True
+
         self.video_is_playing = False
         self.selectedMarker = None
         self.marker_count = 0
 
         self.poly_count = 0
-        self.poly_renderer = PolyRenderer3D(self.vid_w, self.vid_h)
+        self.poly_renderer = PolyRenderer3D(self.real_vid_w, self.real_vid_h)
 
         self._frame_num = 0
         self.frameNumChanged.connect(self.readNewFrame)
@@ -97,14 +106,22 @@ class VideoVisualizer(QMainWindow):
 
         self.initUI()
 
+    def _disp_vid_size(self):
+        return (
+            int(self.real_vid_w * self.vid_disp_scale),
+            int(self.real_vid_h * self.vid_disp_scale)
+        )
 
     def initUI(self):
 
         self.setFocus()
         self.setFocusPolicy(Qt.StrongFocus)
 
-        self.video_panel = ImagePanel(self, self.scaled_size)
+        self.video_panel = ImagePanel(self, self._disp_vid_size())
         self.video_panel.clicked.connect(self.onVideoPanelClick)
+
+        self.map_panel = ImagePanel(self, self._disp_vid_size())
+        self.map_panel.clicked.connect(self.onMapPanelClick)
 
         self.frame_num_textbox = QLineEdit(self)
         self.frame_num_textbox.setText(str(self._frame_num))
@@ -187,7 +204,7 @@ class VideoVisualizer(QMainWindow):
     def drawFrame(self):
         frame = self.cur_frame.copy()
         idx = self.frame_num
-        h2, w2 = self.vid_h / 2, self.vid_w / 2
+        h2, w2 = self.real_vid_h / 2, self.real_vid_w / 2
 
         if self.gt_available:
             pts = np.array([
@@ -195,26 +212,25 @@ class VideoVisualizer(QMainWindow):
             ]).astype(int)
 
             if idx in self.cpe:
-                H = utils.H_between_frames(self.cpe[idx], self.cpg[idx], self.vid_w, self.vid_h)
+                H = utils.H_between_frames(self.cpe[idx], self.cpg[idx], self.real_vid_w, self.real_vid_h)
                 pts2 = utils.project_points(H, pts).astype(int)
-                for i in range(0, 4, 2):
-                    cv2.line(frame, tuple(pts2[i]), tuple(pts2[i+1]), (0, 0, 255), 2)
+                if self.showCross:
+                    for i in range(0, 4, 2):
+                        cv2.line(frame, tuple(pts2[i]), tuple(pts2[i+1]), (0, 0, 255), 2)
 
-            for i in range(0, 4, 2):
-                cv2.line(frame, tuple(pts[i]), tuple(pts[i+1]), (0, 255, 0), 2)
+            if self.showCross:
+                for i in range(0, 4, 2):
+                    cv2.line(frame, tuple(pts[i]), tuple(pts[i+1]), (0, 255, 0), 2)
 
         lookat = -self.cpe[idx]['R'][:, 2]
         up = self.cpe[idx]['R'][:, 1]
         hfov = self.cpe[idx]['hfov']
         self.poly_renderer.set_cam_pose(lookat, up, hfov)
-        overlay = self.poly_renderer.render()
+        overlay = self.poly_renderer.render(self.showPolys, self.showMarkers)
 
-        #overlay[:, :, 3] = 255
-        #print("min/max:", overlay[:,:,3].min(), overlay[:,:,3].max())
         frame = utils.alpha_blend(overlay, frame)
-        #frame = cv2.addWeighted(frame, 0.5, overlay, 0.5, 0)
 
-        frame = cv2.resize(frame, self.scaled_size)
+        frame = cv2.resize(frame, None, fx=self.vid_disp_scale, fy=self.vid_disp_scale)
         h, w, ch = frame.shape
         bytes_per_line = ch * w
         q_img = QImage(frame.data, w, h, bytes_per_line, QImage.Format_BGR888)
@@ -264,10 +280,10 @@ class VideoVisualizer(QMainWindow):
         if self.video_is_playing:
             return
 
-        x = pos.x()
-        y = pos.y()
-        screen_xy = np.array([[x, y]])
-        M = utils.view_to_world(self.cpe[self.frame_num], self.vid_w, self.vid_h)
+        x = pos.x() / self.vid_disp_scale
+        y = pos.y() / self.vid_disp_scale
+        vid_xy = np.array([[x, y]])
+        M = utils.view_to_world(self.cpe[self.frame_num], self.real_vid_w, self.real_vid_h)
 
         # NOTE: using M to "un-project" the screen points into the world only
         # preserves the direction information. Since we set the homogeneous
@@ -275,7 +291,7 @@ class VideoVisualizer(QMainWindow):
         # interpreted as the z-coordinate of the world point results in the
         # point landing _behind_ the camera. Therefore we negate the vector.
         world_xyz = utils.project_points(
-            M, np.array([[x, y]]),
+            M, vid_xy,
             keep_z=True) * -1
 
         if world_xyz[0, 1] >= 0:
@@ -287,26 +303,37 @@ class VideoVisualizer(QMainWindow):
         if self.selectedMarker is not None:
             m = self.selectedMarker
             m.frame_num = self.frame_num
-            m.screen_xy = screen_xy
+            m.vid_xy = vid_xy
             m.world_xyz = world_xyz
             m.updateText()
         else:
             self.marker_count += 1
-            m = Marker(self.marker_count, self.frame_num, screen_xy, world_xyz)
+            m = Marker(self.marker_count, self.frame_num, vid_xy, world_xyz)
             self.marker_list.addItem(m)
         self.poly_renderer.verts[m.uid] = world_xyz.ravel()
 
         self.drawFrame()
 
     @Slot()
+    def onMapPanelClick(self, pos):
+        if not self.selectedMarker:
+            return
+        x = pos.x() / self.vid_disp_scale
+        y = pos.y() / self.vid_disp_scale
+        map_xy = np.array([[x, y]])
+
+    @Slot()
     def onMarkerListSelectionChange(self):
         length = len(self.marker_list.selectedItems())
         assert length in (0, 1)
         self.selectedMarker = self.marker_list.selectedItems()[0] if length == 1 else None
+        self.setFocus()
 
     @Slot()
     def onMarkerListItemDoubleClick(self):
         self.frame_num = self.selectedMarker.frame_num
+        print("Going to frame:", self.frame_num)
+        self.setFocus()
 
     @Slot()
     def onCreatePolyTextboxReturn(self):
@@ -335,6 +362,7 @@ class VideoVisualizer(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setDoubleClickInterval(250)
     window = VideoVisualizer(sys.argv[1])
     window.show()
     sys.exit(app.exec())
