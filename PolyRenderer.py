@@ -109,7 +109,7 @@ class PolyRenderer3D():
                 if self._is_visible(v):
                     cv2.circle(frame, (v[0], v[1]), 4, (0, 0, 255, 255), -1)
                     cv2.putText(frame, f'{uid}', (v[0] + 5, v[1] + 5),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255, 255), 2)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255, 255), 1)
 
         return frame
 

@@ -34,23 +34,25 @@ class PointMarker(QListWidgetItem):
         self.updateText()
 
     def updateText(self):
-        fmt_arr = np.array2string(
-            self.world_xyz,
-            formatter={'float_kind': lambda x: f"{x:.4f}"}
-        )
-        self.setText(f'{self.uid}, {self.frame_num}, {fmt_arr}')
+        self.setText(f'{self.uid}')
 
 @dataclass
-class PolyMarker:
+class PolyMarker(QListWidgetItem):
     uid: int
-    color: tuple[float, float, float, float]
-    verts: NDArray[np.float32]
+    point_uids: list[int]
+
+    def __post_init__(self):
+        super().__init__()
+        self.updateText()
+
+    def updateText(self):
+        self.setText(f'{self.uid}: {self.point_uids}')
 
 class VideoVisualizer(QMainWindow):
 
     frameNumChanged = Signal()
 
-    def __init__(self, video_path):
+    def __init__(self, video_path, map_path=None):
         super().__init__()
 
         self.setWindowTitle("Visualization")
@@ -85,6 +87,18 @@ class VideoVisualizer(QMainWindow):
             for p in self.cpg.values():
                 p['R'] = R @ p['R']
 
+
+        self.map_path = map_path
+
+        if self.map_path is not None:
+            image = cv2.imread(self.map_path)
+            h, *_ = image.shape
+            scale = self._vid_disp_size()[1] / h
+            self.map_image = cv2.resize(image, None, fx=scale, fy=scale)
+        else:
+            self.map_image = None
+
+
         self.showPolyMarkers = True
         self.showPointMarkers = True
         self.showPoseCross = True
@@ -106,21 +120,29 @@ class VideoVisualizer(QMainWindow):
 
         self.initUI()
 
-    def _disp_vid_size(self):
+    def _get_QListWidget_items(self, list_widget):
+        return [list_widget.item(i) for i in range(list_widget.count())]
+
+    def _vid_disp_size(self):
         return (
             int(self.real_vid_w * self.vid_disp_scale),
             int(self.real_vid_h * self.vid_disp_scale)
         )
+
+    def _map_disp_size(self):
+        if self.map_image is None:
+            return (200, self._vid_disp_size()[1])
+        return self.map_image.shape[:2][::-1]
 
     def initUI(self):
 
         self.setFocus()
         self.setFocusPolicy(Qt.StrongFocus)
 
-        self.video_panel = ImagePanel(self, self._disp_vid_size())
+        self.video_panel = ImagePanel(self, self._vid_disp_size())
         self.video_panel.clicked.connect(self.onVideoPanelClick)
 
-        self.map_panel = ImagePanel(self, self._disp_vid_size())
+        self.map_panel = ImagePanel(self, self._map_disp_size())
         self.map_panel.clicked.connect(self.onMapPanelClick)
 
         self.frame_num_textbox = QLineEdit(self)
@@ -140,30 +162,47 @@ class VideoVisualizer(QMainWindow):
         self.ref_frame_textbox.setEnabled(False)
         self.ref_frame_textbox.setText("(n/a)")
 
-        self.marker_list: QListWidget = MarkerList(self)
-        self.marker_list.itemSelectionChanged.connect(self.onMarkerListSelectionChange)
-        self.marker_list.itemDoubleClicked.connect(self.onMarkerListItemDoubleClick)
+        self.points_list: QListWidget = MarkerList(self)
+        self.points_list.itemSelectionChanged.connect(self.onMarkerListSelectionChange)
+        self.points_list.itemDoubleClicked.connect(self.onMarkerListItemDoubleClick)
+
+        self.polys_list: QListWidget = MarkerList(self)
+        #self.points_list.itemSelectionChanged.connect(self.onMarkerListSelectionChange)
+        #self.points_list.itemDoubleClicked.connect(self.onMarkerListItemDoubleClick)
 
         self.container = QWidget(self)
         self.setCentralWidget(self.container)
 
-        box = HVBoxLayout(self.container)
+        ### UI layout specification ###
 
-        box.addWidget(self.video_panel)
-        box.addWidget(self.marker_list)
-        box.newline()
+        v1 = QVBoxLayout(self.container)
 
-        box.addWidget(QLabel('Frame'), 0)
-        box.addWidget(self.frame_num_textbox)
-        box.addWidget(QLabel(f'out of {self.n_frames-1}'), 0)
-        box.addStretch(5)
-        box.addWidget(QLabel(f'Create poly:'), 0)
-        box.addWidget(self.create_poly_textbox, 5)
-        box.addWidget(QLabel('Pose reference frame:'), 0)
-        box.addWidget(self.ref_frame_textbox)
+        r1 = QHBoxLayout()
+        v1.addLayout(r1)
+        r1.addWidget(self.video_panel)
+        r1.addWidget(self.map_panel)
+
+        v2 = QVBoxLayout()
+        r1.addLayout(v2)
+        v2.addWidget(QLabel('Points:'))
+        v2.addWidget(self.points_list)
+        v2.addWidget(QLabel('Areas:'))
+        v2.addWidget(self.polys_list)
+
+        r2 = QHBoxLayout()
+        v1.addLayout(r2)
+        r2.addWidget(QLabel('Frame'), 0)
+        r2.addWidget(self.frame_num_textbox)
+        r2.addWidget(QLabel(f'out of {self.n_frames-1}'), 0)
+        r2.addStretch(5)
+        r2.addWidget(QLabel(f'Create poly:'), 0)
+        r2.addWidget(self.create_poly_textbox, 5)
+        r2.addWidget(QLabel('Pose reference frame:'), 0)
+        r2.addWidget(self.ref_frame_textbox)
 
         self.readNewFrame()
         self.drawFrame()
+        self.drawMap()
 
     def getFrameNum(self):
         return self._frame_num
@@ -238,6 +277,25 @@ class VideoVisualizer(QMainWindow):
         self.video_panel.setPixmap(pixmap)
 
     @Slot()
+    def drawMap(self):
+        if self.map_image is None:
+            return
+        img  = self.map_image.copy()
+
+        for m in self._get_QListWidget_items(self.points_list):
+            if m.map_xy is not None:
+                x, y = m.map_xy[0]
+                cv2.circle(img, (x, y), 2, (0, 0, 255), -1)
+                cv2.putText(img, str(m.uid), (x+2, y-1),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+
+        h, w, ch = img.shape
+        bytes_per_line = ch * w
+        q_img = QImage(img.data, w, h, bytes_per_line, QImage.Format_BGR888)
+        pixmap = QPixmap.fromImage(q_img)
+        self.map_panel.setPixmap(pixmap)
+
+    @Slot()
     def updateFrameNumTextbox(self):
         self.frame_num_textbox.setStyleSheet("")
         self.frame_num_textbox.setText(str(self._frame_num))
@@ -309,7 +367,7 @@ class VideoVisualizer(QMainWindow):
         else:
             self.marker_count += 1
             m = PointMarker(self.marker_count, self.frame_num, vid_xy, world_xyz)
-            self.marker_list.addItem(m)
+            self.points_list.addItem(m)
         self.poly_renderer.verts[m.uid] = world_xyz.ravel()
 
         self.drawFrame()
@@ -318,21 +376,22 @@ class VideoVisualizer(QMainWindow):
     def onMapPanelClick(self, pos):
         if not self.selectedMarker:
             return
-        x = pos.x() / self.vid_disp_scale
-        y = pos.y() / self.vid_disp_scale
+        x = pos.x()# / self.?_disp_scale
+        y = pos.y()# / self.?_disp_scale
         map_xy = np.array([[x, y]])
+        self.selectedMarker.map_xy = map_xy
+        self.drawMap()
 
     @Slot()
     def onMarkerListSelectionChange(self):
-        length = len(self.marker_list.selectedItems())
+        length = len(self.points_list.selectedItems())
         assert length in (0, 1)
-        self.selectedMarker = self.marker_list.selectedItems()[0] if length == 1 else None
+        self.selectedMarker = self.points_list.selectedItems()[0] if length == 1 else None
         self.setFocus()
 
     @Slot()
     def onMarkerListItemDoubleClick(self):
         self.frame_num = self.selectedMarker.frame_num
-        print("Going to frame:", self.frame_num)
         self.setFocus()
 
     @Slot()
@@ -341,28 +400,36 @@ class VideoVisualizer(QMainWindow):
             self.setFocus()
             ids = [int(i) for i in self.create_poly_textbox.text().split()]
             world_xyzs = []
-            for i in range(self.marker_list.count()):
-                m = self.marker_list.item(i)
-                if m.uid in ids:
-                    world_xyzs.append(m.world_xyz)
+            # Existing point markers, and their uids
+            e_pms = self._get_QListWidget_items(self.points_list)
+            e_pm_uids = [m.uid for m in e_pms]
+            for i in ids:
+                if i not in e_pm_uids:
+                    raise ValueError(f"Point {i} not found!")
+                world_xyzs.append(e_pms[e_pm_uids.index(i)].world_xyz)
             self.poly_count += 1
             self.poly_renderer.create_poly(
                 self.poly_count,
-                (0.0, 1.0, 0.0, 0.5),
+                (0.0, 1.0, 0.0, 0.35),
                 np.array(world_xyzs),
             )
+            self.polys_list.addItem(PolyMarker(self.poly_count, ids))
             self.create_poly_textbox.setText("")
             self.create_poly_textbox.setStyleSheet("")
             self.drawFrame()
         except Exception as e:
             print(e)
-            traceback.print_exc()
+            #traceback.print_exc()
             self.create_poly_textbox.setStyleSheet("background-color: pink;")
             return
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setDoubleClickInterval(250)
-    window = VideoVisualizer(sys.argv[1])
+    window = VideoVisualizer(
+        sys.argv[1],
+        sys.argv[2] if len(sys.argv) > 2 else None,
+    )
+    window.move(100, 100)
     window.show()
     sys.exit(app.exec())
