@@ -39,14 +39,24 @@ class PointMarker(QListWidgetItem):
 @dataclass
 class PolyMarker(QListWidgetItem):
     uid: int
-    point_uids: list[int]
+    points: list[PointMarker]
+    H: NDArray[np.float64] = None
 
     def __post_init__(self):
         super().__init__()
         self.updateText()
 
     def updateText(self):
-        self.setText(f'{self.uid}: {self.point_uids}')
+        self.setText(f'{self.uid}: {[p.uid for p in self.points]}')
+
+    def compute_H(self):
+        A = np.array(
+            [p.world_xyz for p in self.points]
+        ).reshape(-1, 3)[:, [0, 2]]
+        B = np.array(
+            [p.map_xy for p in self.points]
+        ).reshape(-1, 2)
+        self.H, _ = cv2.findHomography(A, B, cv2.RANSAC, 1)
 
 class VideoVisualizer(QMainWindow):
 
@@ -400,20 +410,19 @@ class VideoVisualizer(QMainWindow):
             self.setFocus()
             ids = [int(i) for i in self.create_poly_textbox.text().split()]
             world_xyzs = []
-            # Existing point markers, and their uids
-            e_pms = self._get_QListWidget_items(self.points_list)
-            e_pm_uids = [m.uid for m in e_pms]
+            pms = {p.uid: p for p in self._get_QListWidget_items(self.points_list)}
             for i in ids:
-                if i not in e_pm_uids:
+                if i not in pms.keys():
                     raise ValueError(f"Point {i} not found!")
-                world_xyzs.append(e_pms[e_pm_uids.index(i)].world_xyz)
+                world_xyzs.append(pms[i].world_xyz)
             self.poly_count += 1
             self.poly_renderer.create_poly(
                 self.poly_count,
                 (0.0, 1.0, 0.0, 0.35),
                 np.array(world_xyzs),
             )
-            self.polys_list.addItem(PolyMarker(self.poly_count, ids))
+            self.polys_list.addItem(
+                PolyMarker(self.poly_count, [pms[i] for i in ids]))
             self.create_poly_textbox.setText("")
             self.create_poly_textbox.setStyleSheet("")
             self.drawFrame()
