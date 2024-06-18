@@ -22,12 +22,12 @@ from PolyRenderer import PolyRenderer3D
 np.set_printoptions(precision=4, suppress=True)
 
 @dataclass
-class Marker(QListWidgetItem):
+class PointMarker(QListWidgetItem):
     uid: int
     frame_num: int
     vid_xy: NDArray[np.float64]
-    map_xy: NDArray[np.float64]
     world_xyz: NDArray[np.float64]
+    map_xy: NDArray[np.float64] = None
 
     def __post_init__(self):
         super().__init__()
@@ -85,9 +85,9 @@ class VideoVisualizer(QMainWindow):
             for p in self.cpg.values():
                 p['R'] = R @ p['R']
 
-        self.showPolys = True
-        self.showMarkers = True
-        self.showCross = True
+        self.showPolyMarkers = True
+        self.showPointMarkers = True
+        self.showPoseCross = True
 
         self.video_is_playing = False
         self.selectedMarker = None
@@ -214,11 +214,11 @@ class VideoVisualizer(QMainWindow):
             if idx in self.cpe:
                 H = utils.H_between_frames(self.cpe[idx], self.cpg[idx], self.real_vid_w, self.real_vid_h)
                 pts2 = utils.project_points(H, pts).astype(int)
-                if self.showCross:
+                if self.showPoseCross:
                     for i in range(0, 4, 2):
                         cv2.line(frame, tuple(pts2[i]), tuple(pts2[i+1]), (0, 0, 255), 2)
 
-            if self.showCross:
+            if self.showPoseCross:
                 for i in range(0, 4, 2):
                     cv2.line(frame, tuple(pts[i]), tuple(pts[i+1]), (0, 255, 0), 2)
 
@@ -226,7 +226,7 @@ class VideoVisualizer(QMainWindow):
         up = self.cpe[idx]['R'][:, 1]
         hfov = self.cpe[idx]['hfov']
         self.poly_renderer.set_cam_pose(lookat, up, hfov)
-        overlay = self.poly_renderer.render(self.showPolys, self.showMarkers)
+        overlay = self.poly_renderer.render(self.showPolyMarkers, self.showPointMarkers)
 
         frame = utils.alpha_blend(overlay, frame)
 
@@ -308,7 +308,7 @@ class VideoVisualizer(QMainWindow):
             m.updateText()
         else:
             self.marker_count += 1
-            m = Marker(self.marker_count, self.frame_num, vid_xy, world_xyz)
+            m = PointMarker(self.marker_count, self.frame_num, vid_xy, world_xyz)
             self.marker_list.addItem(m)
         self.poly_renderer.verts[m.uid] = world_xyz.ravel()
 
