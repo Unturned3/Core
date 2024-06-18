@@ -271,3 +271,14 @@ def alpha_blend(fg_img, bg_img):
 
     return (blended_img * 255).astype(np.uint8)
 
+def frame_with_most_loop_closures(pairs):
+    unique_indices = np.unique([p.i for p in pairs] + [p.j for p in pairs])
+    loop_closures = np.zeros(unique_indices.max() + 1)
+    for p in pairs:
+        loop_closures[p.i] += 1
+        loop_closures[p.j] += 1
+
+    # Find the frame with the most loop closures
+    max_idx = np.argmax(loop_closures)
+
+    return max_idx
